@@ -3,24 +3,38 @@ stages:
   - build
   - deploy
 
+variables:
+  # مسیر فولدر پروژه
+  PROJECT_DIR: "$CI_PROJECT_DIR/nadinSoftTask"
+  # تنظیمات لازم برای docker-in-docker
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_HOST: "tcp://docker:2375"
+
 test:
   stage: test
   image: python:3.10
   script:
-    - pip install flask
-    - python -m unittest discover || echo "No tests yet"
+    # اگر requirements هست نصب می‌شود؛ در غیر اینصورت Flask نصب می‌شود
+    - pip install -r "$PROJECT_DIR/requirements.txt" || pip install flask
+    # اجرای تست‌ها از داخل فولدر پروژه
+    - python -m unittest discover -s "$PROJECT_DIR" || echo "No tests yet"
 
 build:
   stage: build
-  image: docker:latest
+  image: docker:24.0
   services:
-    - docker:dind
+    - docker:24.0-dind
   script:
-    - docker build -t devops-task .
+    # Build با context فولدر nadinSoftTask
+    - docker build -t devops-task "$PROJECT_DIR"
     - docker images
 
 deploy:
   stage: deploy
+  image: docker:24.0
+  services:
+    - docker:24.0-dind
   script:
     - echo "Deploying to production..."
-    - docker-compose up -d
+    # اگر docker compose v2 موجود باشد از این دستور استفاده می‌شود؛ در غیراینصورت از docker-compose
+    - docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d || docker-compose -f "$PROJECT_DIR/docker-compose.yml" up -d
