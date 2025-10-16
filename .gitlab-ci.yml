@@ -5,7 +5,7 @@ stages:
 
 # فقط مسیر پروژه را global نگه می‌داریم
 variables:
-  PROJECT_DIR: "$CI_PROJECT_DIR/nadinSoftTask"
+  PROJECT_DIR: "$CI_PROJECT_DIR/nadinsoftTask"
 
 test:
   stage: test
