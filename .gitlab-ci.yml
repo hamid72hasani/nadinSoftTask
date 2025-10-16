@@ -3,41 +3,51 @@ stages:
   - build
   - deploy
 
+# فقط مسیر پروژه را global نگه می‌داریم
 variables:
-  # مسیر فولدر پروژه
   PROJECT_DIR: "$CI_PROJECT_DIR/nadinSoftTask"
-  # تنظیمات لازم برای docker-in-docker
-  DOCKER_TLS_CERTDIR: ""
-  DOCKER_HOST: "tcp://docker:2375"
 
 test:
   stage: test
-  tags: ["docker"] 
+  tags: ["docker"]
   image: python:3.10
   script:
-    # اگر requirements هست نصب می‌شود؛ در غیر اینصورت Flask نصب می‌شود
     - pip install -r "$PROJECT_DIR/requirements.txt" || pip install flask
-    # اجرای تست‌ها از داخل فولدر پروژه
     - python -m unittest discover -s "$PROJECT_DIR" || echo "No tests yet"
 
 build:
   stage: build
-  tags: ["docker"] 
+  tags: ["docker"]
   image: docker:24.0
   services:
-    - docker:24.0-dind
+    - name: docker:24.0-dind
+      alias: docker               # ⬅️ خیلی مهم: تا hostname "docker" resolve شود
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""        # ⬅️ TLS خاموش → پورت 2375
+    DOCKER_DRIVER: "overlay2"
+  before_script:
+    - docker version
+    - docker info
   script:
-    # Build با context فولدر nadinSoftTask
     - docker build -t devops-task "$PROJECT_DIR"
     - docker images
 
 deploy:
   stage: deploy
-  tags: ["docker"] 
+  tags: ["docker"]
   image: docker:24.0
   services:
-    - docker:24.0-dind
+    - name: docker:24.0-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: "overlay2"
+  before_script:
+    - docker version
+    - docker info
   script:
     - echo "Deploying to production..."
-    # اگر docker compose v2 موجود باشد از این دستور استفاده می‌شود؛ در غیراینصورت از docker-compose
-    - docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d || docker-compose -f "$PROJECT_DIR/docker-compose.yml" up -d
+    # اگر docker compose v2 هست (در docker:24.0 هست) از همین استفاده کن
+    - docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d
