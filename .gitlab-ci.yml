@@ -12,6 +12,7 @@ variables:
 
 test:
   stage: test
+  tags: ["docker"] 
   image: python:3.10
   script:
     # اگر requirements هست نصب می‌شود؛ در غیر اینصورت Flask نصب می‌شود
@@ -21,6 +22,7 @@ test:
 
 build:
   stage: build
+  tags: ["docker"] 
   image: docker:24.0
   services:
     - docker:24.0-dind
@@ -31,6 +33,7 @@ build:
 
 deploy:
   stage: deploy
+  tags: ["docker"] 
   image: docker:24.0
   services:
     - docker:24.0-dind
