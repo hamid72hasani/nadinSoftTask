@@ -1,0 +1,14 @@
+bootstrap-registry:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
+    - printf 'FROM alpine:3.20\nCMD ["echo","hello-from-registry"]\n' > Dockerfile.reg
+    - docker build -f Dockerfile.reg -t "$CI_REGISTRY_IMAGE:bootstrap" .
+    - docker push "$CI_REGISTRY_IMAGE:bootstrap"
+  rules:
+    - when: manual
