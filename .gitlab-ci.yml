@@ -8,50 +8,45 @@ variables:
   IMAGE_NAME: "$CI_REGISTRY_IMAGE/devops-task"
   IMAGE_TAG: "$CI_COMMIT_SHA"
 
+# --- TEST (shell) ---
 test:
   stage: test
-  tags: ["docker"]
-  image: python:3.10
+  before_script:
+    - python3 --version || sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip
+    - test -d "$PROJECT_DIR" && cd "$PROJECT_DIR" || cd "$CI_PROJECT_DIR"
+    - python3 -m venv .venv
+    - . .venv/bin/activate
+    - pip install -U pip
+    - if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install flask; fi
   script:
-    - pip install -r "$PROJECT_DIR/requirements.txt" || pip install flask
-    - python -m unittest discover -s "$PROJECT_DIR" || echo "No tests yet"
+    - python -m unittest discover -s . || echo "No tests yet"
+  after_script:
+    - deactivate || true
 
+# --- BUILD (shell + docker host) ---
 build:
   stage: build
-  tags: ["docker"]
-  image: docker:24.0
-  services:
-    - name: docker:24.0-dind
-      alias: docker
-  variables:
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_DRIVER: "overlay2"
   before_script:
     - docker version
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" "$CI_REGISTRY" --password-stdin
+    - test -d "$PROJECT_DIR" && cd "$PROJECT_DIR" || cd "$CI_PROJECT_DIR"
   script:
-    # کش قبلی برای سرعت
     - docker pull "$IMAGE_NAME:latest" || true
-    # بیلد با دو تگ: SHA و latest
-    - docker build --cache-from "$IMAGE_NAME:latest" -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" "$PROJECT_DIR"
-    # پابلیش به رجیستری (خیلی مهم)
+    - docker build --cache-from "$IMAGE_NAME:latest" -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" .
     - docker push "$IMAGE_NAME:$IMAGE_TAG"
     - docker push "$IMAGE_NAME:latest"
   rules:
-    - if: '$CI_COMMIT_BRANCH'   # روی همه برنچ‌ها بیلد شود
+    - if: '$CI_COMMIT_BRANCH'  # روی همه برنچ‌ها
 
+# --- DEPLOY (shell + docker compose) ---
 deploy:
   stage: deploy
-  # این job باید روی همون ماشینی اجرا بشه که سرویس باید بمونه (shell executor)
-  tags: ["prod-runner"]
   before_script:
-    # توجه: در shell runner از ایمیج داکر استفاده نمی‌کنیم؛ باید docker/compose روی میزبان نصب باشد
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    - cd "$PROJECT_DIR"
+    - docker compose version || echo "⚠️ Docker Compose v2 لازم است (docker compose)."
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" "$CI_REGISTRY" --password-stdin
+    - test -d "$PROJECT_DIR" && cd "$PROJECT_DIR" || cd "$CI_PROJECT_DIR"
     - export IMAGE="$IMAGE_NAME:latest"
   script:
-    # فایل compose باید فقط از image استفاده کند (بدون build)
     - docker compose pull
     - docker compose up -d --remove-orphans --wait --wait-timeout 180
     - docker compose ps
@@ -60,4 +55,3 @@ deploy:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: manual
       allow_failure: false
-
