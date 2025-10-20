@@ -3,9 +3,10 @@ stages:
   - build
   - deploy
 
-# فقط مسیر پروژه را global نگه می‌داریم
 variables:
   PROJECT_DIR: "$CI_PROJECT_DIR/nadinsoftTask"
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE/devops-task"
+  IMAGE_TAG: "$CI_COMMIT_SHA"
 
 test:
   stage: test
@@ -21,24 +22,6 @@ build:
   image: docker:24.0
   services:
     - name: docker:24.0-dind
-      alias: docker               # ⬅️ خیلی مهم: تا hostname "docker" resolve شود
-  variables:
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""        # ⬅️ TLS خاموش → پورت 2375
-    DOCKER_DRIVER: "overlay2"
-  before_script:
-    - docker version
-    - docker info
-  script:
-    - docker build -t devops-task "$PROJECT_DIR"
-    - docker images
-
-deploy:
-  stage: deploy
-  tags: ["docker"]
-  image: docker:24.0
-  services:
-    - name: docker:24.0-dind
       alias: docker
   variables:
     DOCKER_HOST: "tcp://docker:2375"
@@ -46,8 +29,35 @@ deploy:
     DOCKER_DRIVER: "overlay2"
   before_script:
     - docker version
-    - docker info
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" "$CI_REGISTRY" --password-stdin
   script:
-    - echo "Deploying to production..."
-    # اگر docker compose v2 هست (در docker:24.0 هست) از همین استفاده کن
-    - docker compose -f "$PROJECT_DIR/docker-compose.yml" up -d
+    # کش قبلی برای سرعت
+    - docker pull "$IMAGE_NAME:latest" || true
+    # بیلد با دو تگ: SHA و latest
+    - docker build --cache-from "$IMAGE_NAME:latest" -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" "$PROJECT_DIR"
+    # پابلیش به رجیستری (خیلی مهم)
+    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+    - docker push "$IMAGE_NAME:latest"
+  rules:
+    - if: '$CI_COMMIT_BRANCH'   # روی همه برنچ‌ها بیلد شود
+
+deploy:
+  stage: deploy
+  # این job باید روی همون ماشینی اجرا بشه که سرویس باید بمونه (shell executor)
+  tags: ["prod-runner"]
+  before_script:
+    # توجه: در shell runner از ایمیج داکر استفاده نمی‌کنیم؛ باید docker/compose روی میزبان نصب باشد
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - cd "$PROJECT_DIR"
+    - export IMAGE="$IMAGE_NAME:latest"
+  script:
+    # فایل compose باید فقط از image استفاده کند (بدون build)
+    - docker compose pull
+    - docker compose up -d --remove-orphans --wait --wait-timeout 180
+    - docker compose ps
+    - docker compose logs --no-color --tail=200 || true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+
