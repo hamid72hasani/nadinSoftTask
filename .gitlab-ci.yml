@@ -1,44 +1,52 @@
-version: '3.8'
+stages: [build, test, deploy]
 
-services:
-  web:
-    build: .
-    image: ${IMAGE:-web:local}
-    ports:
-      - "5000:5000"
-    restart: always
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:5000/healthz"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-    networks: [appnet]
+variables:
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
 
-  prometheus:
-    image: prom/prometheus:v2.54.0
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--web.enable-lifecycle"
-      - "--alertmanager.url=http://alertmanager:9093"
-    ports:
-      - "9090:9090"
-    depends_on: [web]
-    restart: always
-    networks: [appnet]
+# هیچ service‌ای لازم نیست؛ Runner شل خودش به Docker دسترسی داره
+# ---------------------------------------
+build:
+  stage: build
+  tags: ["shell"]       # مطابق با runner shell شما
+  script:
+    - docker version
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:latest" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE:latest"
 
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    volumes:
-      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
-    ports:
-      - "9093:9093"
-    restart: always
-    networks: [appnet]
+# ---------------------------------------
+test:
+  stage: test
+  tags: ["shell"]
+  before_script:
+    - python3 -m venv venv
+    - source venv/bin/activate
+    - pip install -r requirements.txt
+    - pip install -q pytest
+  script:
+    - pytest -q
+  needs: ["build"]
 
-networks:
-  appnet:
-    driver: bridge
+# ---------------------------------------
+deploy:
+  stage: deploy
+  tags: ["shell"]
+  before_script:
+    - apk add --no-cache openssh-client || sudo apt-get update && sudo apt-get install -y openssh-client || true
+    - mkdir -p ~/.ssh
+    - echo "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+  script: |
+    ssh -i ~/.ssh/id_rsa $DEPLOY_USER@$DEPLOY_HOST '
+      set -e
+      cd '"$DEPLOY_PATH"'
+      docker login '"$CI_REGISTRY"' -u '"$CI_REGISTRY_USER"' -p '"$CI_REGISTRY_PASSWORD"'
+      export IMAGE='"$CI_REGISTRY_IMAGE"':latest
+      docker compose pull || true
+      docker compose up -d --build --remove-orphans
+      docker image prune -f
+    '
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
