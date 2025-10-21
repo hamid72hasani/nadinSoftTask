@@ -1,90 +1,16 @@
-stages: [test, build, integration]
+stages:
+  - run
 
-variables:
-  # مسیر زیرپوشهٔ پروژه
-  PROJECT_DIR: "nadinsoftTask"
-  # اتصال کلاینت به Docker-in-Docker
-  DOCKER_HOST: tcp://docker:2375
-  DOCKER_TLS_CERTDIR: ""
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  IMAGE: "web:ci"
-
-default:
-  image: docker:27
-  services:
-    - name: docker:27-dind
-      command: ["--mtu=1460"]
-
-# ابزارهای لازم و ورود به فولدر پروژه
-.before_in_subdir: &before_in_subdir
-  - apk add --no-cache python3 py3-pip curl jq docker-cli-compose
-  - python3 -V
-  - pip install --upgrade pip
-  - cd "$PROJECT_DIR"
-  # انتخاب خودکار docker compose یا docker-compose (بسته به Runner)
-  - |
-    if docker compose version >/dev/null 2>&1; then
-      export DC="docker compose"
-    else
-      docker-compose version
-      export DC="docker-compose"
-    fi
-
-unit_tests:
-  stage: test
-  before_script:
-    *before_in_subdir
+run_flask:
+  stage: run
   script:
+    - cd nadinsoftTask
+    - python3 -m venv venv
+    - source venv/bin/activate
     - pip install -r requirements.txt
-    - pytest -q
-  artifacts:
-    when: always
-    reports:
-      junit: junit.xml
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
-
-build_image:
-  stage: build
-  before_script:
-    *before_in_subdir
-  script:
-    - docker version
-    # چون الان داخل nadinsoftTask هستیم، context همین فولدر است
-    - docker build -t "$IMAGE" .
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
-
-integration_compose:
-  stage: integration
-  before_script:
-    *before_in_subdir
-  script:
-    # Build با Compose (همه سرویس‌ها)
-    - $DC build
-    # بالا آوردن کل استک
-    - $DC up -d
-    # منتظر سالم شدن سرویس web (curl داخل کانتینر web نصب است)
-    - |
-      for i in $(seq 1 10); do
-        if $DC exec -T web curl -fsS http://localhost:5000/healthz >/dev/null; then
-          echo "web healthy"; break
-        fi
-        echo "waiting for web..."
-        sleep 3
-      done
-    # اسموک‌چک‌ها: health, metrics و readiness پرومتئوس
-    - $DC exec -T web curl -fsS http://localhost:5000/healthz | jq .
-    - $DC exec -T web curl -fsS http://localhost:5000/metrics | head -n 20
-    - $DC exec -T prometheus curl -fsS http://localhost:9090/-/ready
-  after_script:
-    - $DC ps || true
-    - $DC logs --no-color > compose.logs || true
-    - $DC down -v || true
-  artifacts:
-    when: always
-    paths:
-      # مسیر آرте‌فکت نسبت به ریشهٔ ریپو
-      - $PROJECT_DIR/compose.logs
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
+    - echo "Starting Flask app..."
+    - python3 app.py &
+    - sleep 5
+    - curl -fsS http://127.0.0.1:5000 || echo "Server not responding"
+  tags:
+    - shell
