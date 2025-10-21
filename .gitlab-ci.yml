@@ -1,7 +1,7 @@
 stages:
   - build
   - run
-  - test
+  - deploy
 
 variables:
   PROJECT_DIR: "nadinsoftTask"
@@ -15,7 +15,7 @@ build:
     - echo "Building Docker images..."
     - docker compose build
 
-# 🚀 Stage 2: Run services
+# 🚀 Stage 2: Run services locally in CI
 run:
   stage: run
   tags: [shell]
@@ -26,19 +26,21 @@ run:
     - docker compose ps
   when: on_success
 
-# ✅ Stage 3: Test application
-test:
-  stage: test
+# 🌍 Stage 3: Deploy to public server (same machine / VPS)
+deploy:
+  stage: deploy
   tags: [shell]
   script:
     - cd $PROJECT_DIR
-    - echo "Testing web server..."
-    - sleep 5   # صبر برای بالا آمدن سرور
-    - curl -fsS http://localhost:5000 | tee output.txt
-  after_script:
-    - cd $PROJECT_DIR
-    - docker compose down -v
-  artifacts:
-    when: always
-    paths:
-      - $PROJECT_DIR/output.txt
+    - echo "Deploying Flask app..."
+    # اگر همین Runner روی سرور پابلیک تو هست، همین compose کافی است
+    - docker compose down -v || true
+    - docker compose up -d web
+    - docker ps
+    - echo "App deployed!"
+    - echo "Now open: http://172.16.109.136:5000"
+  environment:
+    name: production
+    url: http://172.16.109.136:5000
+  only:
+    - main
