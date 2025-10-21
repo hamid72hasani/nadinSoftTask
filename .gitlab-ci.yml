@@ -1,26 +1,37 @@
 stages: [build, test, deploy]
 
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
+  # اگر DOCKERHUB_REPO را در UI تعریف نکرده‌اید، در اسکریپت مقداردهی می‌شود.
 
-# هیچ service‌ای لازم نیست؛ Runner شل خودش به Docker دسترسی داره
 # ---------------------------------------
 build:
   stage: build
-  tags: ["shell"]       # مطابق با runner shell شما
+  tags: ["shell"]       # Runner شما از نوع shell است و به Docker میزبان دسترسی دارد
   script:
+    - set -eo pipefail
     - docker version
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
-    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:latest" .
-    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
-    - docker push "$CI_REGISTRY_IMAGE:latest"
+    # محاسبه‌ی ریپوی مقصد روی Docker Hub (اگر به‌صورت CI variable نداده باشید)
+    - export DOCKERHUB_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
+    # لاگین به Docker Hub
+    - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" docker.io --password-stdin
+    # Build & Tag
+    - docker build -t "docker.io/$DOCKERHUB_REPO:$CI_COMMIT_SHORT_SHA" -t "docker.io/$DOCKERHUB_REPO:latest" .
+    # Push
+    - docker push "docker.io/$DOCKERHUB_REPO:$CI_COMMIT_SHORT_SHA"
+    - docker push "docker.io/$DOCKERHUB_REPO:latest"
 
 # ---------------------------------------
 test:
   stage: test
   tags: ["shell"]
   before_script:
+    - set -eo pipefail
     - python3 -m venv venv
     - source venv/bin/activate
     - pip install -r requirements.txt
@@ -34,19 +45,24 @@ deploy:
   stage: deploy
   tags: ["shell"]
   before_script:
+    - set -eo pipefail
     - apk add --no-cache openssh-client || sudo apt-get update && sudo apt-get install -y openssh-client || true
     - mkdir -p ~/.ssh
     - echo "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
     - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
   script: |
+    # انتقال نام ریپو به محیط deploy اگر در اینجا مقداردهی نشده
+    export DOCKERHUB_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
+
     ssh -i ~/.ssh/id_rsa $DEPLOY_USER@$DEPLOY_HOST '
-      set -e
+      set -euo pipefail
       cd '"$DEPLOY_PATH"'
-      docker login '"$CI_REGISTRY"' -u '"$CI_REGISTRY_USER"' -p '"$CI_REGISTRY_PASSWORD"'
-      export IMAGE='"$CI_REGISTRY_IMAGE"':latest
+      # لاگین به Docker Hub روی سرور مقصد
+      echo '"$DOCKERHUB_TOKEN"' | docker login -u '"$DOCKERHUB_USERNAME"' docker.io --password-stdin
+      # اگر docker-compose.yml از متغیر IMAGE استفاده می‌کند، این مقدار را ست می‌کنیم
+      export IMAGE=docker.io/'"$DOCKERHUB_REPO"':latest
       docker compose pull || true
       docker compose up -d --build --remove-orphans
       docker image prune -f
     '
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+  needs: ["build"]
