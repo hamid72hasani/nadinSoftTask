@@ -1,16 +1,44 @@
 stages:
+  - build
   - run
+  - test
 
-run_flask:
-  stage: run
+variables:
+  PROJECT_DIR: "nadinsoftTask"
+
+# 🧱 Stage 1: Build Docker images
+build:
+  stage: build
+  tags: [shell]
   script:
-    - cd nadinsoftTask
-    - python3 -m venv venv
-    - source venv/bin/activate
-    - pip install -r requirements.txt
-    - echo "Starting Flask app..."
-    - python3 app.py &
-    - sleep 5
-    - curl -fsS http://127.0.0.1:5000 || echo "Server not responding"
-  tags:
-    - shell
+    - cd $PROJECT_DIR
+    - echo "Building Docker images..."
+    - docker compose build
+
+# 🚀 Stage 2: Run services
+run:
+  stage: run
+  tags: [shell]
+  script:
+    - cd $PROJECT_DIR
+    - echo "Starting services..."
+    - docker compose up -d
+    - docker compose ps
+  when: on_success
+
+# ✅ Stage 3: Test application
+test:
+  stage: test
+  tags: [shell]
+  script:
+    - cd $PROJECT_DIR
+    - echo "Testing web server..."
+    - sleep 5   # صبر برای بالا آمدن سرور
+    - curl -fsS http://localhost:5000 | tee output.txt
+  after_script:
+    - cd $PROJECT_DIR
+    - docker compose down -v
+  artifacts:
+    when: always
+    paths:
+      - $PROJECT_DIR/output.txt
