@@ -33,7 +33,6 @@ deploy:
   script:
     - cd $PROJECT_DIR
     - echo "Deploying Flask app..."
-    # اگر همین Runner روی سرور پابلیک تو هست، همین compose کافی است
     - docker compose down -v || true
     - docker compose up -d web
     - docker ps
@@ -41,6 +40,6 @@ deploy:
     - echo "Now open: http://172.16.109.136:5000"
   environment:
     name: production
-    url: http://172.16.109.136:5000
+    url: "http://172.16.109.136:5000"
   only:
     - main
