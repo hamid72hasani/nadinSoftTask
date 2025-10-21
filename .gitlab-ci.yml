@@ -6,19 +6,19 @@ stages:
 variables:
   PROJECT_DIR: "nadinsoftTask"
 
-# 🧱 Stage 1: Build Docker images
 build:
   stage: build
-  tags: [shell]
+  tags:
+    - shell
   script:
     - cd $PROJECT_DIR
     - echo "Building Docker images..."
     - docker compose build
 
-# 🚀 Stage 2: Run services locally in CI
 run:
   stage: run
-  tags: [shell]
+  tags:
+    - shell
   script:
     - cd $PROJECT_DIR
     - echo "Starting services..."
@@ -26,10 +26,10 @@ run:
     - docker compose ps
   when: on_success
 
-# 🌍 Stage 3: Deploy to public server (same machine / VPS)
 deploy:
   stage: deploy
-  tags: [shell]
+  tags:
+    - shell
   script:
     - cd $PROJECT_DIR
     - echo "Deploying Flask app..."
@@ -37,7 +37,6 @@ deploy:
     - docker compose up -d web
     - docker ps
     - echo "App deployed!"
-    - echo "Now open: http://172.16.109.136:5000"
   environment:
     name: production
     url: "http://172.16.109.136:5000"
