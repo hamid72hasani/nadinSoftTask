@@ -7,24 +7,29 @@ workflow:
 variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
-  # اگر DOCKERHUB_REPO را در UI تعریف نکرده‌اید، در اسکریپت مقداردهی می‌شود.
 
 # ---------------------------------------
 build:
   stage: build
-  tags: ["shell"]       # Runner شما از نوع shell است و به Docker میزبان دسترسی دارد
+  tags: ["shell"]
   script:
     - set -eo pipefail
     - docker version
-    # محاسبه‌ی ریپوی مقصد روی Docker Hub (اگر به‌صورت CI variable نداده باشید)
-    - export DOCKERHUB_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
-    # لاگین به Docker Hub
+
+    # 1) محاسبه نام ریپو به‌صورت امن (lowercase + حذف کاراکترهای نامعتبر)
+    # اگر DOCKERHUB_REPO از قبل تعریف شده بود، همان استفاده می‌شود؛
+    # وگرنه از <username>/<project> ساخته و پاکسازی می‌کنیم.
+    - RAW_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
+    - SAFE_REPO="$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._/-]+/-/g')"
+    - echo "Using Docker Hub repo: $SAFE_REPO"
+
+    # 2) لاگین Docker Hub
     - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" docker.io --password-stdin
-    # Build & Tag
-    - docker build -t "docker.io/$DOCKERHUB_REPO:$CI_COMMIT_SHORT_SHA" -t "docker.io/$DOCKERHUB_REPO:latest" .
-    # Push
-    - docker push "docker.io/$DOCKERHUB_REPO:$CI_COMMIT_SHORT_SHA"
-    - docker push "docker.io/$DOCKERHUB_REPO:latest"
+
+    # 3) Build & Push
+    - docker build -t "docker.io/$SAFE_REPO:$CI_COMMIT_SHORT_SHA" -t "docker.io/$SAFE_REPO:latest" .
+    - docker push "docker.io/$SAFE_REPO:$CI_COMMIT_SHORT_SHA"
+    - docker push "docker.io/$SAFE_REPO:latest"
 
 # ---------------------------------------
 test:
@@ -51,16 +56,16 @@ deploy:
     - echo "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
     - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
   script: |
-    # انتقال نام ریپو به محیط deploy اگر در اینجا مقداردهی نشده
-    export DOCKERHUB_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
+    set -euo pipefail
+    # همان منطق پاکسازی نام ریپو در سمت سرور
+    RAW_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
+    SAFE_REPO=$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._\/-]+/-/g')
 
     ssh -i ~/.ssh/id_rsa $DEPLOY_USER@$DEPLOY_HOST '
       set -euo pipefail
       cd '"$DEPLOY_PATH"'
-      # لاگین به Docker Hub روی سرور مقصد
       echo '"$DOCKERHUB_TOKEN"' | docker login -u '"$DOCKERHUB_USERNAME"' docker.io --password-stdin
-      # اگر docker-compose.yml از متغیر IMAGE استفاده می‌کند، این مقدار را ست می‌کنیم
-      export IMAGE=docker.io/'"$DOCKERHUB_REPO"':latest
+      export IMAGE=docker.io/'"$SAFE_REPO"':latest
       docker compose pull || true
       docker compose up -d --build --remove-orphans
       docker image prune -f
