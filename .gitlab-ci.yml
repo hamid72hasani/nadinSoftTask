@@ -1,7 +1,11 @@
-stages: [test]
-ping:
+shell-smoke:
   stage: test
+  variables:
+    CI_DEBUG_TRACE: "true"
   script:
-    - echo "HELLO from shell runner"
-    - whoami
-    - pwd
+    - set -xeuo pipefail
+    - echo "whoami=$(whoami)"
+    - echo "pwd=$(pwd)"
+    - echo "CI_PROJECT_DIR=${CI_PROJECT_DIR:-unset}"
+    - ls -la || true
+    - echo OK
