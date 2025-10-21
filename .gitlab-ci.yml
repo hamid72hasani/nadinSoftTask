@@ -1,72 +1,90 @@
-stages: [build, test, deploy]
-
-workflow:
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+stages: [test, build, integration]
 
 variables:
+  # مسیر زیرپوشهٔ پروژه
+  PROJECT_DIR: "nadinsoftTask"
+  # اتصال کلاینت به Docker-in-Docker
+  DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
-  DOCKER_DRIVER: overlay2
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  IMAGE: "web:ci"
 
-# ---------------------------------------
-build:
-  stage: build
-  tags: ["shell"]
-  script: |
-    set -eo pipefail
-    docker version
+default:
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      command: ["--mtu=1460"]
 
-    # محاسبه‌ی نام ریپو به‌صورت امن (lowercase + حذف کاراکترهای نامعتبر)
-    RAW_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
-    SAFE_REPO="$(printf '%s' "$RAW_REPO" \
-      | tr '[:upper:]' '[:lower:]' \
-      | sed -E 's/[^a-z0-9._\/-]+/-/g')"
-    echo "Using Docker Hub repo: $SAFE_REPO"
+# ابزارهای لازم و ورود به فولدر پروژه
+.before_in_subdir: &before_in_subdir
+  - apk add --no-cache python3 py3-pip curl jq docker-cli-compose
+  - python3 -V
+  - pip install --upgrade pip
+  - cd "$PROJECT_DIR"
+  # انتخاب خودکار docker compose یا docker-compose (بسته به Runner)
+  - |
+    if docker compose version >/dev/null 2>&1; then
+      export DC="docker compose"
+    else
+      docker-compose version
+      export DC="docker-compose"
+    fi
 
-    # لاگین به Docker Hub
-    echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" docker.io --password-stdin
-
-    # Build & Push
-    docker build -t "docker.io/$SAFE_REPO:$CI_COMMIT_SHORT_SHA" -t "docker.io/$SAFE_REPO:latest" .
-    docker push "docker.io/$SAFE_REPO:$CI_COMMIT_SHORT_SHA"
-    docker push "docker.io/$SAFE_REPO:latest"
-
-# ---------------------------------------
-test:
+unit_tests:
   stage: test
-  tags: ["shell"]
   before_script:
-    - set -eo pipefail
-    - python3 -m venv venv
-    - source venv/bin/activate
-    - pip install -r requirements.txt
-    - pip install -q pytest
+    *before_in_subdir
   script:
+    - pip install -r requirements.txt
     - pytest -q
-  needs: ["build"]
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
 
-# ---------------------------------------
-deploy:
-  stage: deploy
-  tags: ["shell"]
+build_image:
+  stage: build
   before_script:
-    - set -eo pipefail
-    - apk add --no-cache openssh-client || sudo apt-get update && sudo apt-get install -y openssh-client || true
-    - mkdir -p ~/.ssh
-    - echo "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
-    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
-  script: |
-    set -euo pipefail
-    RAW_REPO="${DOCKERHUB_REPO:-$DOCKERHUB_USERNAME/$CI_PROJECT_NAME}"
-    SAFE_REPO=$(printf '%s' "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._\/-]+/-/g')
+    *before_in_subdir
+  script:
+    - docker version
+    # چون الان داخل nadinsoftTask هستیم، context همین فولدر است
+    - docker build -t "$IMAGE" .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
 
-    ssh -i ~/.ssh/id_rsa "$DEPLOY_USER@$DEPLOY_HOST" '
-      set -euo pipefail
-      cd '"$DEPLOY_PATH"'
-      echo '"$DOCKERHUB_TOKEN"' | docker login -u '"$DOCKERHUB_USERNAME"' docker.io --password-stdin
-      export IMAGE=docker.io/'"$SAFE_REPO"':latest
-      docker compose pull || true
-      docker compose up -d --build --remove-orphans
-      docker image prune -f
-    '
-  needs: ["build"]
+integration_compose:
+  stage: integration
+  before_script:
+    *before_in_subdir
+  script:
+    # Build با Compose (همه سرویس‌ها)
+    - $DC build
+    # بالا آوردن کل استک
+    - $DC up -d
+    # منتظر سالم شدن سرویس web (curl داخل کانتینر web نصب است)
+    - |
+      for i in $(seq 1 10); do
+        if $DC exec -T web curl -fsS http://localhost:5000/healthz >/dev/null; then
+          echo "web healthy"; break
+        fi
+        echo "waiting for web..."
+        sleep 3
+      done
+    # اسموک‌چک‌ها: health, metrics و readiness پرومتئوس
+    - $DC exec -T web curl -fsS http://localhost:5000/healthz | jq .
+    - $DC exec -T web curl -fsS http://localhost:5000/metrics | head -n 20
+    - $DC exec -T prometheus curl -fsS http://localhost:9090/-/ready
+  after_script:
+    - $DC ps || true
+    - $DC logs --no-color > compose.logs || true
+    - $DC down -v || true
+  artifacts:
+    when: always
+    paths:
+      # مسیر آرте‌فکت نسبت به ریشهٔ ریپو
+      - $PROJECT_DIR/compose.logs
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
