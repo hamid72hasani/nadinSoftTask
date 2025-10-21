@@ -1,7 +1,7 @@
 shell-smoke:
   stage: test
   tags:
-    - shell
+    - shell-runner-01
   variables:
     CI_DEBUG_TRACE: "true"
   script:
