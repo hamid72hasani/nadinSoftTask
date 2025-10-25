@@ -1,10 +1,21 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
 rule_files:
   - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  - job_name: 'flask-app'
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "flask-app"
     metrics_path: /metrics
     static_configs:
-      - targets: ['web:5000']   # نام سرویس اپ در compose
+      - targets: ["web:5000"]   # نام سرویس اپ در compose
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
